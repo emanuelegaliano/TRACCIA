@@ -98,8 +98,9 @@ class Footstep(Generic[F], ABC):
         Execution flow:
           1. Call `execute(footprint)` to perform this step's logic.
           2. If a next footstep has been wired via `_set_next`, forward
-             the resulting Footprint to `next.run(result)` (which will
-             in turn propagate along the chain).
+             the resulting Footprint to the next footstep by calling it
+             as a callable: `next(result)`. This ensures that the next
+             footstep's `enrich_metadata` is also invoked.
           3. If there is no next footstep, return the result as-is.
 
         This method should generally not be overridden by subclasses:
@@ -109,7 +110,9 @@ class Footstep(Generic[F], ABC):
         result = self.execute(footprint)
 
         if self._next_footstep is not None:
-            return self._next_footstep.run(result)
+            # Call the next footstep as a callable so that its own
+            # `enrich_metadata` and chaining logic are executed.
+            return self._next_footstep(result)
 
         return result
 
