@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "traccia"
 version = "0.1.0"
@@ -7,7 +11,7 @@ requires-python = ">=3.10"
 license = { text = "MIT" }
 
 authors = [
-  { name = "Emanuele Galiano", email = "empty@fornow.commingsoon" }
+  { name = "Emanuele Galiano", email = "empty@fornow.comingsoon" }
 ]
 
 dependencies = []
