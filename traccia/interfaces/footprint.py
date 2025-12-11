@@ -13,7 +13,7 @@ class FootprintMetadata:
     through a TRACCIA pipeline.
 
     This structure is meant to be shared across all Footprint
-    implementations so that handlers, loggers, and monitoring tools
+    implementations so that footsteps, loggers, and monitoring tools
     can rely on a common shape for metadata.
 
     Fields:
@@ -34,8 +34,8 @@ class FootprintMetadata:
             execution) finished processing this Footprint.
 
         handlers:
-            Ordered list of handler names that have processed this
-            Footprint so far. Handlers are expected to append their
+            Ordered list of footstep names that have processed this
+            Footprint so far. Footsteps are expected to append their
             own name when they successfully run.
 
         tags:
@@ -51,7 +51,8 @@ class FootprintMetadata:
 
     run_id: str | None = None
 
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    # Use timezone-aware UTC datetimes everywhere for consistency.
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     started_at: datetime | None = None
     finished_at: datetime | None = None
 
@@ -81,7 +82,7 @@ class FootprintMetadata:
         """
         Append the given handler name to the handlers history.
 
-        Handlers are encouraged to call this once they have
+        Footsteps are encouraged to call this once they have
         successfully processed the footprint.
         """
         self.handlers.append(handler_name)
@@ -123,25 +124,17 @@ class Footprint(Protocol):
     Core protocol for the shared state that moves along a TRACCIA pipeline.
 
     A Footprint instance represents the mutable, shared state that each
-    handler receives, possibly mutates, and passes along. While the
+    footstep receives, possibly mutates, and passes along. While the
     concrete structure of the state is intentionally left to the user,
     all implementations MUST expose a standardized metadata object.
 
     This is achieved through the `get_metadata()` method, which returns
-    a `FootprintMetadata` instance. This gives all handlers and tooling
+    a `FootprintMetadata` instance. This gives all footsteps and tooling
     a common place to:
       - inspect execution history,
       - attach tags,
       - record timestamps,
       - store debugging or auditing information.
-
-    Typical usage in handlers:
-
-        def process(self, footprint: Footprint) -> Footprint:
-            meta = footprint.get_metadata()
-            meta.add_handler(self.name)
-            # ... do the actual work ...
-            return footprint
 
     Implementors are free to store the metadata internally in whatever
     way they find convenient (attribute, internal dict, etc.), as long
@@ -156,7 +149,7 @@ class Footprint(Protocol):
         Implementations must guarantee that:
           - The same metadata instance is returned for the lifetime
             of this footprint object.
-          - The metadata object is mutable, so handlers can enrich it
+          - The metadata object is mutable, so footsteps can enrich it
             over time without replacing it.
         """
         ...
