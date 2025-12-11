@@ -4,7 +4,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Generic, TypeVar
 
-from .footprint import Footprint, FootprintMetadata
+from .footprint import Footprint
 
 F = TypeVar("F", bound=Footprint)
 
