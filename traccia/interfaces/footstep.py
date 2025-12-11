@@ -35,6 +35,7 @@ class Footstep(Generic[F], ABC):
         If no name is provided, the concrete class name is used.
         """
         self._name: str = name or self.__class__.__name__
+        self._next_footstep: Footstep | None = None
 
     @property
     def name(self) -> str:
@@ -100,3 +101,16 @@ class Footstep(Generic[F], ABC):
         """
         self.enrich_metadata(footprint)
         return self.run(footprint)
+    
+    def _set_next(self, next_footstep: Footstep) -> None:
+        """
+        Internal method to set the next footstep in the pipeline.
+
+        This method is intended for use by Pipeline implementations
+        that manage footstep chaining. It is not part of the public
+        Footstep API and should not be called by user code.
+
+        Args:
+            next_footstep (Footstep): The next footstep to execute after this one.
+        """
+        self._next_footstep = next_footstep
