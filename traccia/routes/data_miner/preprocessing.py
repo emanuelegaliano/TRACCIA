@@ -1,9 +1,11 @@
 from dataclasses import dataclass, field
 from typing import Any, Mapping
+import pandas as pd
 from pandas import DataFrame
 
-from traccia.interfaces.footprint import FootprintMetadata
+from ...interfaces.footprint import FootprintMetadata
 from ...interfaces import Footprint, Footstep
+from ...core.path import Path
 
 
 @dataclass
@@ -142,3 +144,193 @@ class VariableCleaningFootstep(Footstep):
         result = self.execute(footprint)
         # type checker non sa che result è DataMiningFootprint, quindi fai un cast o un semplice return
         return result  # type: ignore[return-value]
+    
+
+@dataclass
+class MissingValuesFootstep(Footstep):
+    """
+    Generic step for handling missing values.
+
+    The behaviour is configured per-column via `column_strategies`.
+
+    Parameters
+    ----------
+    column_strategies:
+        Mapping from column name to strategy name.
+        Supported strategies:
+            - "drop_rows": drop rows where this column is null
+            - "mean":      fill nulls with column mean   (numeric)
+            - "median":    fill nulls with column median (numeric)
+            - "mode":      fill nulls with column mode   (first mode)
+            - "constant":  fill nulls with a constant value (see `constant_values`)
+
+    constant_values:
+        Optional mapping from column name to the value to be used when
+        strategy == "constant". If a column is configured with
+        "constant" but not found in `constant_values`, behaviour
+        depends on `strict`.
+
+    strict:
+        If True:
+            - raise ValueError when a specified column is missing
+            - raise ValueError when a strategy is invalid or cannot be applied
+        If False:
+            - log a message in the footprint and continue
+    """
+
+    column_strategies: Mapping[str, str]
+    constant_values: Mapping[str, Any] | None = None
+    strict: bool = True
+
+    def execute(self, footprint: Footprint) -> Footprint:
+        if not isinstance(footprint, DataMiningFootprint):
+            raise TypeError(
+                f"{self.__class__.__name__} expects a DataMiningFootprint, "
+                f"got {type(footprint)!r}."
+            )
+
+        fp: DataMiningFootprint = footprint
+
+        # 1. Scegli il dataframe su cui lavorare
+        if fp.cleaned_df is None:
+            df = fp.raw_df.copy()
+            fp.preprocessing_log.append(
+                "MissingValuesFootstep: initialized cleaned_df from raw_df."
+            )
+        else:
+            df = fp.cleaned_df.copy()
+
+        # 2. Applica le strategie colonna per colonna
+        for col, strategy in self.column_strategies.items():
+            if col not in df.columns:
+                msg = f"MissingValuesFootstep: column '{col}' not found."
+                if self.strict:
+                    raise ValueError(msg)
+                fp.preprocessing_log.append(msg)
+                continue
+
+            # Se non ci sono NaN, non facciamo nulla (ma lo logghiamo)
+            n_missing = df[col].isna().sum()
+            if n_missing == 0:
+                fp.preprocessing_log.append(
+                    f"MissingValuesFootstep: no missing values in column '{col}'."
+                )
+                continue
+
+            strategy = strategy.lower().strip()
+
+            if strategy == "drop_rows":
+                before = len(df)
+                df = df[df[col].notna()]
+                after = len(df)
+                fp.preprocessing_log.append(
+                    f"MissingValuesFootstep: dropped {before - after} rows due to NaNs in '{col}'."
+                )
+
+            elif strategy in {"mean", "median"}:
+                if not pd.api.types.is_numeric_dtype(df[col]):
+                    msg = (
+                        f"MissingValuesFootstep: strategy '{strategy}' "
+                        f"requires numeric dtype for column '{col}'."
+                    )
+                    if self.strict:
+                        raise ValueError(msg)
+                    fp.preprocessing_log.append(msg)
+                    continue
+
+                if strategy == "mean":
+                    fill_value = df[col].mean()
+                else:  # median
+                    fill_value = df[col].median()
+
+                df[col] = df[col].fillna(fill_value)
+                fp.preprocessing_log.append(
+                    f"MissingValuesFootstep: filled {n_missing} NaNs in '{col}' "
+                    f"using {strategy}={fill_value}."
+                )
+
+            elif strategy == "mode":
+                mode_series = df[col].mode(dropna=True)
+                if mode_series.empty:
+                    msg = (
+                        f"MissingValuesFootstep: cannot compute mode for column '{col}' "
+                        "(no non-null values)."
+                    )
+                    if self.strict:
+                        raise ValueError(msg)
+                    fp.preprocessing_log.append(msg)
+                    continue
+
+                fill_value = mode_series.iloc[0]
+                df[col] = df[col].fillna(fill_value)
+                fp.preprocessing_log.append(
+                    f"MissingValuesFootstep: filled {n_missing} NaNs in '{col}' "
+                    f"using mode={fill_value!r}."
+                )
+
+            elif strategy == "constant":
+                if not self.constant_values or col not in self.constant_values:
+                    msg = (
+                        f"MissingValuesFootstep: strategy 'constant' for column '{col}' "
+                        "but no value provided in `constant_values`."
+                    )
+                    if self.strict:
+                        raise ValueError(msg)
+                    fp.preprocessing_log.append(msg)
+                    continue
+
+                fill_value = self.constant_values[col]
+                df[col] = df[col].fillna(fill_value)
+                fp.preprocessing_log.append(
+                    f"MissingValuesFootstep: filled {n_missing} NaNs in '{col}' "
+                    f"using constant={fill_value!r}."
+                )
+
+            else:
+                msg = (
+                    f"MissingValuesFootstep: unsupported strategy '{strategy}' "
+                    f"for column '{col}'."
+                )
+                if self.strict:
+                    raise ValueError(msg)
+                fp.preprocessing_log.append(msg)
+                continue
+
+        # 3. Salva il dataframe aggiornato nel footprint
+        fp.cleaned_df = df
+
+        # 4. Registra il passaggio nel metadata
+        fp.get_metadata().add_handler(self.__class__.__name__)
+
+        return fp
+
+    # Facoltativo, come per il Footstep precedente
+    def run(self, footprint: DataMiningFootprint) -> DataMiningFootprint:
+        result = self.execute(footprint)
+        return result  # type: ignore[return-value]
+
+
+
+class PreprocessingPath(Path[DataMiningFootprint]):
+    """
+    Simple TRACCIA Path that runs all preprocessing footsteps in sequence
+    on a DataMiningFootprint.
+
+    The internal Path wiring uses a Chain of Responsibility:
+      - only the first Footstep is triggered by `run(...)`;
+      - each Footstep is responsible for delegating to the next one.
+    """
+
+    def __init__(
+        self,
+        cleaning_step: VariableCleaningFootstep,
+        missing_step: MissingValuesFootstep,
+        run_id: str | None = None,
+    ) -> None:
+        # Pass footsteps as varargs, and optionally set a name + run_id
+        super().__init__(
+            cleaning_step,
+            missing_step,
+            name="PreprocessingPath",
+            run_id=run_id,
+        )
