@@ -5,7 +5,7 @@ from typing import TypeVar
 
 from ..interfaces.footprint import Footprint
 from ..interfaces.footstep import Footstep
-from ..routes.path import Path
+from ..core.path import Path
 
 F = TypeVar("F", bound=Footprint)
 
