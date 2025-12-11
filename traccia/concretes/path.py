@@ -1,16 +1,15 @@
-# traccia/interfaces/path.py
+# traccia/concretes/path.py
 from __future__ import annotations
 
-from abc import ABC
 from typing import Generic, List, TypeVar
 
-from .footprint import Footprint
-from .footstep import Footstep
+from ..interfaces.footprint import Footprint
+from ..interfaces.footstep import Footstep
 
 F = TypeVar("F", bound=Footprint)
 
 
-class Path(Generic[F], ABC):
+class Path(Generic[F]):
     """
     Abstract base class representing a TRACCIA Path, i.e. a pipeline
     that orchestrates a sequence of Footsteps on a shared Footprint.
@@ -124,7 +123,7 @@ class Path(Generic[F], ABC):
         meta.add_tag("path", self.name)
 
     # ---------------------------------------------------------------------
-    # Execution (trigger only the first node)
+    # Execution API
     # ---------------------------------------------------------------------
 
     def run(self, footprint: F) -> F:
