@@ -1,9 +1,4 @@
-from .preprocessing import (
-    DataMiningFootprint, 
-    VariableCleaningFootstep,
-    MissingValuesFootstep,
-    PreprocessingPath,
-    )
+from .preprocessing import DataMiningFootprint, VariableCleaningFootstep, MissingValuesFootstep, PreprocessingPath
 
 __all__ = [
     "DataMiningFootprint",
