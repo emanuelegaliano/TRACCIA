@@ -6,112 +6,97 @@ from datetime import datetime, timezone
 from typing import Any, Protocol, runtime_checkable
 
 
-@dataclass
+def utc_now() -> datetime:
+    """Return a timezone-aware UTC datetime."""
+    return datetime.now(timezone.utc)
+
+
+@dataclass(slots=True)
 class FootprintMetadata:
     """
-    Standardized metadata attached to a Footprint as it travels
-    through a TRACCIA pipeline.
+    Standard metadata attached to a Footprint while it flows through a pipeline.
 
-    This structure is meant to be shared across all Footprint
-    implementations so that footsteps, loggers, and monitoring tools
-    can rely on a common shape for metadata.
-
-    Fields:
-        run_id:
-            Optional identifier for the current pipeline execution.
-            Can be used to correlate logs or external monitoring data.
-
-        created_at:
-            Timestamp when this metadata instance was created.
-            Typically corresponds to the moment the Footprint is initialized.
-
-        started_at:
-            Optional timestamp for when the pipeline (or a specific
-            execution) actually started processing this Footprint.
-
-        finished_at:
-            Optional timestamp for when the pipeline (or a specific
-            execution) finished processing this Footprint.
-
-        handlers:
-            Ordered list of footstep names that have processed this
-            Footprint so far. Footsteps are expected to append their
-            own name when they successfully run.
-
-        tags:
-            Lightweight string-based tags for quick classification
-            or filtering (e.g. {"environment": "dev", "mode": "debug"}).
-
-        extra:
-            Free-form additional metadata. This is the place for
-            arbitrary, non-structured information that does not fit
-            the other fields but is still relevant for debugging or
-            auditing.
+    Keep this object small, predictable, and easy to serialize. Anything domain-
+    specific can go into `extra`.
     """
 
     run_id: str | None = None
 
-    # Use timezone-aware UTC datetimes everywhere for consistency.
-    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    # Always use timezone-aware UTC timestamps for consistency.
+    created_at: datetime = field(default_factory=utc_now)
     started_at: datetime | None = None
     finished_at: datetime | None = None
 
+    # Execution history
     handlers: list[str] = field(default_factory=list)
+
+    # Lightweight string tags (good for filtering)
     tags: dict[str, str] = field(default_factory=dict)
+
+    # Free-form metadata (debug info, counters, etc.)
     extra: dict[str, Any] = field(default_factory=dict)
 
-    # --- Convenience methods ---------------------------------------------
+    # --- Lifecycle ---------------------------------------------------------
 
-    def mark_started(self, when: datetime | None = None) -> None:
+    def mark_started(self, when: datetime | None = None, *, overwrite: bool = False) -> None:
         """
-        Mark the footprint as having started its pipeline journey.
+        Mark processing as started.
 
-        If `when` is not provided, the current UTC time is used.
+        By default this is idempotent (it won't overwrite an existing timestamp)
+        unless `overwrite=True`.
         """
-        self.started_at = when or datetime.now(timezone.utc)
+        if self.started_at is not None and not overwrite:
+            return
+        self.started_at = when or utc_now()
 
-    def mark_finished(self, when: datetime | None = None) -> None:
+    def mark_finished(self, when: datetime | None = None, *, overwrite: bool = False) -> None:
         """
-        Mark the footprint as having finished its pipeline journey.
+        Mark processing as finished.
 
-        If `when` is not provided, the current UTC time is used.
+        By default this is idempotent (it won't overwrite an existing timestamp)
+        unless `overwrite=True`.
         """
-        self.finished_at = when or datetime.now(timezone.utc)
+        if self.finished_at is not None and not overwrite:
+            return
+        self.finished_at = when or utc_now()
 
-    def add_handler(self, handler_name: str) -> None:
+    @property
+    def duration_seconds(self) -> float | None:
         """
-        Append the given handler name to the handlers history.
+        Return processing duration in seconds, if both started_at and finished_at are set.
+        """
+        if self.started_at is None or self.finished_at is None:
+            return None
+        return (self.finished_at - self.started_at).total_seconds()
 
-        Footsteps are encouraged to call this once they have
-        successfully processed the footprint.
-        """
-        self.handlers.append(handler_name)
+    # --- History / tagging -------------------------------------------------
+
+    def add_handler(self, name: str) -> None:
+        """Append a step/handler name to the execution history."""
+        self.handlers.append(name)
 
     def add_tag(self, key: str, value: str) -> None:
-        """
-        Add or update a string-based tag.
-        """
+        """Add or update a string tag."""
         self.tags[key] = value
 
     def add_extra(self, key: str, value: Any) -> None:
-        """
-        Add or update an entry in the free-form extra metadata.
-        """
+        """Add or update a free-form metadata entry."""
         self.extra[key] = value
 
-    def to_dict(self) -> dict[str, Any]:
-        """
-        Return a JSON-serializable representation of this metadata.
+    # --- Serialization -----------------------------------------------------
 
-        Datetime fields are converted to ISO 8601 strings. All other
-        fields are returned as-is, assuming they are themselves
-        serializable or will be handled downstream.
+    def as_dict(self) -> dict[str, Any]:
+        """
+        Return a JSON-friendly representation.
+
+        Datetimes are emitted as ISO 8601 strings.
         """
         return {
             "run_id": self.run_id,
             "created_at": self.created_at.isoformat(),
             "started_at": self.started_at.isoformat() if self.started_at else None,
             "finished_at": self.finished_at.isoformat() if self.finished_at else None,
+            "duration_seconds": self.duration_seconds,
             "handlers": list(self.handlers),
             "tags": dict(self.tags),
             "extra": dict(self.extra),
@@ -121,35 +106,18 @@ class FootprintMetadata:
 @runtime_checkable
 class Footprint(Protocol):
     """
-    Core protocol for the shared state that moves along a TRACCIA pipeline.
+    Shared mutable state that moves through a TRACCIA pipeline.
 
-    A Footprint instance represents the mutable, shared state that each
-    footstep receives, possibly mutates, and passes along. While the
-    concrete structure of the state is intentionally left to the user,
-    all implementations MUST expose a standardized metadata object.
-
-    This is achieved through the `get_metadata()` method, which returns
-    a `FootprintMetadata` instance. This gives all footsteps and tooling
-    a common place to:
-      - inspect execution history,
-      - attach tags,
-      - record timestamps,
-      - store debugging or auditing information.
-
-    Implementors are free to store the metadata internally in whatever
-    way they find convenient (attribute, internal dict, etc.), as long
-    as successive calls to `get_metadata()` return the same object
-    for a given Footprint instance.
+    A Footprint can be any user-defined object, but it MUST expose a stable
+    FootprintMetadata instance via get_metadata().
     """
 
     def get_metadata(self) -> FootprintMetadata:
         """
-        Return the `FootprintMetadata` associated with this footprint.
+        Return the metadata object associated with this Footprint.
 
-        Implementations must guarantee that:
-          - The same metadata instance is returned for the lifetime
-            of this footprint object.
-          - The metadata object is mutable, so footsteps can enrich it
-            over time without replacing it.
+        Requirements:
+        - Must return the same object for the lifetime of the Footprint instance.
+        - The returned metadata must be mutable and shared across steps.
         """
         ...

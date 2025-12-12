@@ -1,368 +1,212 @@
-# traccia/concretes/path.py
+# traccia/core/trail.py
 from __future__ import annotations
 
-from typing import TypeVar
+from dataclasses import dataclass, field
+from typing import Generic, TypeVar
 
-from ..interfaces.footprint import Footprint
-from ..interfaces.footstep import Footstep
-from ..core.path import Path
+from traccia.core.step import Step
+from traccia.interfaces.footprint import Footprint
 
 F = TypeVar("F", bound=Footprint)
 
-class Trail(Path[F]):
+
+@dataclass(slots=True)
+class Trail(Generic[F]):
     """
-    User-friendly, fluent pipeline built on top of `Path`.
+    A user-friendly, fluent pipeline.
 
-    A Trail is a concrete, configurable Path with additional utilities:
-
-      - Fluent construction:
-          - `then(step1, step2, ...)`
-          - `insert_before("StepName", ...)`
-          - `insert_after("StepName", ...)`
-          - `remove("StepName")`
-          - `replace("OldStepName", new_step)`
-
-      - Metadata helpers:
-          - `with_run_id("run-123")` (clone with a different run id)
-          - `with_tag("env", "dev")` (pipeline-level default tags)
-          - `describe()` / `pretty()` for human-readable inspection
-
-      - Debug / validation helpers:
-          - `validate_chain()` to check consistency of the chain
-          - `dry_run(footprint)` to simulate a run without executing
-            business logic (only metadata enrichment)
-          - `trace(enabled=True)` to emit simple console logs during run
-
-    It is intended as the main entry point for end users building
-    TRACCIA-based pipelines.
+    Intentionally simple: a Trail is just an ordered list of Steps.
+    Execution is a plain `for` loop.
     """
 
-    def __init__(
-        self,
-        *footsteps: Footstep[F],
-        name: str | None = None,
-        run_id: str | None = None,
-        default_tags: dict[str, str] | None = None,
-    ) -> None:
-        """
-        Initialize a Trail with an ordered list of footsteps.
-
-        Args:
-            *footsteps:
-                Initial footsteps that compose the Trail, in execution order.
-            name:
-                Optional human-readable name. Defaults to the class name.
-            run_id:
-                Optional run identifier. If set, it will be stored in the
-                Footprint metadata when the Trail is run.
-            default_tags:
-                Optional dictionary of tags that will be applied at the
-                pipeline level (via metadata) before execution.
-        """
-        super().__init__(*footsteps, name=name, run_id=run_id)
-        self._default_tags: dict[str, str] = dict(default_tags or {})
-        self._trace_enabled: bool = False
+    steps: list[Step[F]] = field(default_factory=list)
+    name: str = "Trail"
+    run_id: str | None = None
+    default_tags: dict[str, str] = field(default_factory=dict)
+    trace_enabled: bool = False
 
     # ------------------------------------------------------------------
     # Fluent construction / editing
     # ------------------------------------------------------------------
 
-    def then(self, *footsteps: Footstep[F]) -> Trail[F]:
-        """
-        Append one or more footsteps to the end of this Trail, relinking
-        the internal chain. Returns `self` to allow fluent usage.
-
-        Example:
-            trail = (
-                Trail(step1, step2)
-                .then(step3)
-                .then(step4, step5)
-            )
-        """
-        if footsteps:
-            self._footsteps.extend(footsteps)
-            self._link_chain()
+    def then(self, *steps: Step[F]) -> "Trail[F]":
+        """Append one or more steps to the end of this Trail."""
+        if steps:
+            self.steps.extend(steps)
         return self
 
     def _index_of(self, step_name: str) -> int | None:
-        """
-        Return the index of the first footstep whose `name` matches
-        the given `step_name`, or None if not found.
-        """
-        for idx, step in enumerate(self._footsteps):
-            if step.name == step_name:
-                return idx
+        """Return the index of the first step with the given name, or None."""
+        for i, s in enumerate(self.steps):
+            if s.name == step_name:
+                return i
         return None
 
-    def insert_before(self, step_name: str, *new_steps: Footstep[F]) -> Trail[F]:
-        """
-        Insert one or more footsteps BEFORE the first footstep with
-        the given name. If no matching step is found, the Trail is
-        left unchanged.
-
-        Returns `self` for fluent chaining.
-        """
+    def insert_before(self, step_name: str, *new_steps: Step[F]) -> "Trail[F]":
+        """Insert steps before the first step matching `step_name`."""
         if not new_steps:
             return self
-
         idx = self._index_of(step_name)
         if idx is None:
             return self
-
-        for offset, step in enumerate(new_steps):
-            self._footsteps.insert(idx + offset, step)
-        self._link_chain()
+        for offset, s in enumerate(new_steps):
+            self.steps.insert(idx + offset, s)
         return self
 
-    def insert_after(self, step_name: str, *new_steps: Footstep[F]) -> Trail[F]:
-        """
-        Insert one or more footsteps AFTER the first footstep with
-        the given name. If no matching step is found, the Trail is
-        left unchanged.
-
-        Returns `self` for fluent chaining.
-        """
+    def insert_after(self, step_name: str, *new_steps: Step[F]) -> "Trail[F]":
+        """Insert steps after the first step matching `step_name`."""
         if not new_steps:
             return self
-
         idx = self._index_of(step_name)
         if idx is None:
             return self
-
         insert_pos = idx + 1
-        for offset, step in enumerate(new_steps):
-            self._footsteps.insert(insert_pos + offset, step)
-        self._link_chain()
+        for offset, s in enumerate(new_steps):
+            self.steps.insert(insert_pos + offset, s)
         return self
 
-    def remove(self, step_name: str) -> Trail[F]:
-        """
-        Remove the first footstep whose `name` matches `step_name`.
-        If no such footstep exists, the Trail remains unchanged.
-
-        Returns `self` for fluent chaining.
-        """
+    def remove(self, step_name: str) -> "Trail[F]":
+        """Remove the first step matching `step_name`."""
         idx = self._index_of(step_name)
         if idx is None:
             return self
-
-        del self._footsteps[idx]
-        self._link_chain()
+        del self.steps[idx]
         return self
 
-    def replace(self, step_name: str, *new_steps: Footstep[F]) -> Trail[F]:
-        """
-        Replace the first footstep whose `name` matches `step_name`
-        with one or more new footsteps.
-
-        If no such footstep exists, the Trail remains unchanged.
-
-        Returns `self` for fluent chaining.
-        """
+    def replace(self, step_name: str, *new_steps: Step[F]) -> "Trail[F]":
+        """Replace the first step matching `step_name` with one or more steps."""
         if not new_steps:
             return self
-
         idx = self._index_of(step_name)
         if idx is None:
             return self
-
-        # Remove the old step and insert the new ones in its place.
-        del self._footsteps[idx]
-        for offset, step in enumerate(new_steps):
-            self._footsteps.insert(idx + offset, step)
-        self._link_chain()
+        del self.steps[idx]
+        for offset, s in enumerate(new_steps):
+            self.steps.insert(idx + offset, s)
         return self
 
     # ------------------------------------------------------------------
     # Metadata / configuration helpers
     # ------------------------------------------------------------------
 
-    def with_run_id(self, run_id: str) -> Trail[F]:
-        """
-        Return a NEW Trail instance with the same footsteps, name and
-        default tags, but with a different run_id.
-
-        Useful for reusing a trail definition across multiple runs.
-        """
-        clone = Trail(
-            *self._footsteps,
-            name=self.name,
-            run_id=run_id,
-            default_tags=self._default_tags,
-        )
-        clone._trace_enabled = self._trace_enabled
-        return clone
-
-    def with_tag(self, key: str, value: str) -> Trail[F]:
-        """
-        Add or update a default pipeline-level tag that will be applied
-        to the Footprint metadata when the Trail is run.
-
-        Returns `self` for fluent chaining.
-        """
-        self._default_tags[key] = value
+    def with_run_id(self, run_id: str | None) -> "Trail[F]":
+        """Set the run id and return self (fluent)."""
+        self.run_id = run_id
         return self
 
-    def enrich_metadata(self, footprint: F) -> None:
-        """
-        Override of Path.enrich_metadata.
-
-        In addition to the base behavior (run_id + "path" tag), this
-        also applies any default tags configured on the Trail.
-        """
-        super().enrich_metadata(footprint)
-        meta = footprint.get_metadata()
-        for key, value in self._default_tags.items():
-            meta.add_tag(key, value)
-
-    # ------------------------------------------------------------------
-    # Debug / validation / inspection
-    # ------------------------------------------------------------------
-
-    def trace(self, enabled: bool = True) -> Trail[F]:
-        """
-        Enable or disable simple console tracing for this Trail.
-
-        When tracing is enabled, `run()` and `dry_run()` will emit
-        basic messages to stdout before and after each step.
-        """
-        self._trace_enabled = enabled
+    def with_tag(self, key: str, value: str) -> "Trail[F]":
+        """Set a default pipeline tag and return self (fluent)."""
+        self.default_tags[key] = value
         return self
+
+    def trace(self, enabled: bool = True) -> "Trail[F]":
+        """Enable/disable simple stdout tracing during run/dry_run."""
+        self.trace_enabled = enabled
+        return self
+
+    # ------------------------------------------------------------------
+    # Inspection / validation
+    # ------------------------------------------------------------------
 
     def describe(self) -> dict[str, object]:
-        """
-        Return a structured description of this Trail, including:
-          - name
-          - run_id
-          - number of footsteps
-          - list of footstep names
-          - default tags
-        """
+        """Return a structured description of this Trail."""
         return {
             "name": self.name,
-            "run_id": getattr(self, "_run_id", None),
-            "footstep_count": len(self._footsteps),
-            "footsteps": [step.name for step in self._footsteps],
-            "default_tags": dict(self._default_tags),
+            "run_id": self.run_id,
+            "step_count": len(self.steps),
+            "steps": [s.name for s in self.steps],
+            "default_tags": dict(self.default_tags),
+            "trace_enabled": self.trace_enabled,
         }
 
     def pretty(self) -> str:
-        """
-        Return a human-readable, multi-line string describing this Trail.
-        """
-        desc = self.describe()
+        """Return a human-readable multi-line description."""
         lines: list[str] = [
-            f"Trail: {desc['name']}",
-            f"  run_id: {desc['run_id']}",
-            f"  footsteps ({desc['footstep_count']}):",
+            f"Trail: {self.name}",
+            f"  run_id: {self.run_id}",
+            f"  steps ({len(self.steps)}):",
         ]
-        for idx, step_name in enumerate(desc["footsteps"]):  # type: ignore[arg-type]
-            lines.append(f"    {idx + 1}. {step_name}")
-        if desc["default_tags"]:
+        for i, s in enumerate(self.steps):
+            lines.append(f"    {i + 1}. {s.name}")
+
+        if self.default_tags:
             lines.append("  default tags:")
-            for k, v in desc["default_tags"].items():  # type: ignore[union-attr]
+            for k, v in self.default_tags.items():
                 lines.append(f"    - {k} = {v}")
+
+        lines.append(f"  trace: {self.trace_enabled}")
         return "\n".join(lines)
 
-    def validate_chain(self) -> list[str]:
-        """
-        Perform basic validation checks on the Trail and return a list
-        of warning/error messages. An empty list means no issues have
-        been detected at this level.
-
-        Checks performed:
-          - Trail has at least one footstep.
-          - The chain defined by `_next_footstep` (if used) is
-            consistent with the internal order of `_footsteps`.
-        """
+    def validate(self) -> list[str]:
+        """Perform basic checks and return a list of issues (empty == ok)."""
         issues: list[str] = []
+        if not self.steps:
+            issues.append("Trail has no steps.")
 
-        if not self._footsteps:
-            issues.append("Trail has no footsteps.")
-
-        # Optional: validate that the `_next_footstep` chain is consistent.
-        if self._footsteps:
-            visited: list[Footstep[F]] = []
-            current: Footstep[F] | None = self._footsteps[0]
-            while current is not None:
-                visited.append(current)
-                current = getattr(current, "_next_footstep", None)  # type: ignore[assignment]
-
-            if len(visited) != len(self._footsteps):
-                issues.append(
-                    "Mismatch between internal footsteps list and "
-                    "_next_footstep chain length."
-                )
-            else:
-                # They should be in the same order.
-                for a, b in zip(self._footsteps, visited):
-                    if a is not b:
-                        issues.append(
-                            "Order mismatch between internal footsteps list and "
-                            "_next_footstep chain."
-                        )
-                        break
+        names = [s.name for s in self.steps]
+        if len(set(names)) != len(names):
+            issues.append("Trail contains duplicate step names. Consider making them unique.")
 
         return issues
 
     # ------------------------------------------------------------------
-    # Execution variants
+    # Execution
     # ------------------------------------------------------------------
+
+    def _enrich_pipeline_metadata(self, footprint: F) -> None:
+        """Apply pipeline-level metadata (run_id, tags, trail name)."""
+        meta = footprint.get_metadata()
+
+        if self.run_id is not None:
+            meta.run_id = self.run_id
+
+        meta.add_tag("trail", self.name)
+
+        for k, v in self.default_tags.items():
+            meta.add_tag(k, v)
 
     def dry_run(self, footprint: F) -> F:
         """
-        Simulate a run of this Trail without executing the business logic
-        inside each Footstep.
+        Simulate a run without executing step business logic.
 
-        This method:
-          - enriches metadata at the pipeline level,
-          - initializes `started_at` if needed,
-          - calls `enrich_metadata` on each Footstep (but NOT `run`),
-          - updates `finished_at` at the end.
-
-        This is useful for debugging, testing metadata behavior, or
-        documenting execution order without touching real data.
+        It only enriches metadata and appends step names to handlers.
         """
         meta = footprint.get_metadata()
+        self._enrich_pipeline_metadata(footprint)
 
-        # Pipeline-level metadata enrichment.
-        self.enrich_metadata(footprint)
-
-        # Mark the beginning of the journey if not already started.
         if meta.started_at is None:
             meta.mark_started()
 
-        # Step-level metadata enrichment only (no business logic).
-        for step in self._footsteps:
-            if self._trace_enabled:
-                print(f"[TRACCIA][dry-run] entering {step.name}")
-            step.enrich_metadata(footprint)
-            if self._trace_enabled:
-                print(f"[TRACCIA][dry-run] leaving  {step.name}")
+        try:
+            for s in self.steps:
+                if self.trace_enabled:
+                    print(f"[TRACCIA][dry-run] -> {s.name}")
+                meta.add_handler(s.name)
+        finally:
+            meta.mark_finished()
 
-        # Mark the end of the journey.
-        meta.mark_finished()
         return footprint
 
-    # Override run to add optional tracing, but keep Path semantics.
     def run(self, footprint: F) -> F:
-        """
-        Execute the Trail on the given Footprint, with optional console
-        tracing if enabled.
+        """Execute the Trail against the given footprint."""
+        meta = footprint.get_metadata()
+        self._enrich_pipeline_metadata(footprint)
 
-        This behaves like `Path.run`, but emits simple messages when
-        tracing is turned on via `trace(True)`.
-        """
-        if self._trace_enabled:
-            print(f"[TRACCIA] Trail '{self.name}' starting run")
+        if meta.started_at is None:
+            meta.mark_started()
 
-        result = super().run(footprint)
+        if self.trace_enabled:
+            print(f"[TRACCIA] Trail '{self.name}' starting")
 
-        if self._trace_enabled:
-            meta = result.get_metadata()
-            print(
-                f"[TRACCIA] Trail '{self.name}' finished run "
-                f"(handlers={meta.handlers})"
-            )
+        try:
+            for s in self.steps:
+                if self.trace_enabled:
+                    print(f"[TRACCIA] -> {s.name}")
+                footprint = s(footprint)
+        finally:
+            meta.mark_finished()
 
-        return result
+        if self.trace_enabled:
+            print(f"[TRACCIA] Trail '{self.name}' finished (handlers={meta.handlers})")
+
+        return footprint

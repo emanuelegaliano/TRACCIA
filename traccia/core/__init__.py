@@ -1,7 +1,8 @@
-from .path import Path
+from .step import Step, step
 from .trail import Trail
 
 __all__ = [
-    "Path",
+    "Step",
+    "step",
     "Trail",
 ]

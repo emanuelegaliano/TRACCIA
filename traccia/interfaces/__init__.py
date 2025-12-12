@@ -1,8 +1,11 @@
-from .footprint import Footprint, FootprintMetadata
-from .footstep import Footstep
+from traccia.core.step import Step, step
+from traccia.core.trail import Trail
+from traccia.interfaces.footprint import Footprint, FootprintMetadata
 
 __all__ = [
-    "Footprint", 
+    "Footprint",
     "FootprintMetadata",
-    "Footstep",
-    ]
+    "Step",
+    "step",
+    "Trail",
+]
