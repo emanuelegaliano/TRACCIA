@@ -1,1 +1,6 @@
+# Runtime dependencies
+# (TRACCIA currently has no external runtime dependencies)
+
+# Development / testing dependencies
+pytest>=7.0
 typing-extensions
